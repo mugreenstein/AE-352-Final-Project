@@ -1,0 +1,9 @@
+mtot = 0.943 #kg
+m_motor = .052 #kg
+m_prop = .01 #kg
+mr = m_motor + m_prop # kg
+md = mtot - 4*(m_motor + m_prop) #kg
+r = .225 #m
+I = (m_motor + m_prop) * r**2 #kg*m^2
+h1 = 1 #m
+constants = [mtot, md, mr, I, h1]
