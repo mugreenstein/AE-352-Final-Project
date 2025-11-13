@@ -1,50 +1,54 @@
 import numpy as np
 from sympy import *
-from data.initial_conditions import constants
+from data.constants import params
+# dynamics.py
 
-# EOMs for the dynamical system
-def skycrane(u):
+
+# ----------------------------------------
+#   THRUST IN BODY FRAME
+# ----------------------------------------
+def thrust_body(omegas):
     """
-    Returns the derivative of the state function using the
-    equations of motion for the system without damping.
+    Compute total thrust vector expressed in the BODY frame.
+    Thrust = k * (ω1^2 + ω2^2 + ω3^2 + ω4^2)
+    Direction: +body-z
     """
-    x, xdot, theta, thetadot = u 
-    m1, m2, L, k, b, g = constants
+    k = params["k_thrust"]
 
-    A = Matrix([[m1+m2, m2*L*cos(theta)],
-                [cos(theta)/L, 1]])
-    B = Matrix([[m2*L*thetadot**2*sin(theta)-k*x],
-                [-g/L * sin(theta)]])
+    omega1, omega2, omega3, omega4 = omegas
+    total_thrust = k * (omega1**2 + omega2**2 + omega3**2 + omega4**2)
 
-    O = A.inv() @ B
-    xddot = O[0]
-    thetaddot = O[1]
-    udot = np.array([xdot, xddot, thetadot, thetaddot])
-    return udot
+    return np.array([0.0, 0.0, total_thrust])
 
-def skycrane_damping(u):
+
+# ----------------------------------------
+#   TRANSLATIONAL ACCELERATION (EOM)
+# ----------------------------------------
+def translational_accel(state, R_body_to_inertial):
     """
-    Returns the derivative of the state function using the
-    equations of motion for the system with damping.
+    Computes inertial-frame linear acceleration.
+    state = [x,y,z, vx,vy,vz, phi,theta,psi, p,q,r, ω1,ω2,ω3,ω4]
     """
-    x, xdot, theta, thetadot = u 
-    m1, m2, L, k, b, g = constants
+    m = params["mtot"]
+    g = params["g"]
 
-    A = Matrix([[m1+m2, m2*L*cos(theta)],
-                [cos(theta)/L, 1]])
-    B = Matrix([[m2*L*thetadot**2*sin(theta)-k*x-b*xdot],
-                [-g/L * sin(theta)]])
+    # unpack state
+    x, y, z, vx, vy, vz, phi, theta, psi = state[:9]
+    omegas = state[-4:]
 
-    O = A.inv() @ B
-    xddot = O[0]
-    thetaddot = O[1]
-    udot = np.array([xdot, xddot, thetadot, thetaddot])
-    return udot
+    # rotate thrust from body -> inertial
+    R = R_body_to_inertial(phi, theta, psi)
+    T_B = thrust_body(omegas)
 
-def set_constants(new_constants):
-    """
-    Update the module-level 'constants' tuple so skycrane() and
-    skycrane_damping() pick up the current (m1, m2, L, k, b, g).
-    """
-    global constants
-    constants = new_constants
+    # gravity (always inertial frame)
+    F_g = np.array([0.0, 0.0, -m * g])
+
+    # Newton's 2nd law
+    a = (F_g + R @ T_B) / m
+
+    return a
+
+
+
+
+
