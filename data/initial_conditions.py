@@ -1,6 +1,6 @@
 # initial_conditions.py
 import numpy as np
-from constants import omega_hover
+from source.constants import omega_hover
 
 def make_initial_state():
     # positions (inertial)
