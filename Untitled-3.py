@@ -1,16 +1,19 @@
 # %%
 import numpy as np
 
+# Physical parameters
 mtot = 0.943
-m_motor = .052
-m_prop = .01
+m_motor = 0.052
+m_prop  = 0.01
 mr = m_motor + m_prop
 md = mtot - 4*(m_motor + m_prop)
-L = .225
+L = 0.225   # arm length
 I_single = (m_motor + m_prop) * L**2
+
 h1 = 1
 g = 9.81
 rho = 1.225
+
 k_drag = 1e-6
 
 Ixx = 2 * I_single
@@ -20,29 +23,12 @@ Izz = 4 * I_single
 omega_hover = 400
 k_thrust = mtot * g / (4 * omega_hover**2)
 
-# --- Rotor / disk assumptions (tunable) ---
-R_rotor = 0.10                         # rotor radius [m] (e.g. ~8 inch prop)
-A_disk = np.pi * R_rotor**2           # rotor disk area
-
-# Ideal induced power coefficient from momentum theory:
-# T = k_thrust * omega^2
-# Ideal hover power P = T^(3/2) / sqrt(2 rho A)
-# => P = cP * omega^3, with:
-cP_rotor = (k_thrust**1.5) / np.sqrt(2 * rho * A_disk)
-
-# --- Battery assumptions (tunable to match COTS pack) ---
-battery_voltage = 11.1        # [V], e.g. 3S LiPo
-battery_capacity_Ah = 1.5     # [Ah], e.g. 1500 mAh
-battery_energy_J = battery_voltage * battery_capacity_Ah * 3600.0
-
 params = {
-    "mtot": mtot, "md": md, "mr": mr, "I": I_single,
-    "h1": h1, "g": g, "rho": rho, "L": L,
-    "omega_hover": omega_hover, "k_thrust": k_thrust,
-    "k_drag": k_drag, "Ixx": Ixx, "Iyy": Iyy, "Izz": Izz, 
-    "R_rotor": R_rotor, "A_disk": A_disk, "cP_rotor": cP_rotor, 
-    "battery_voltage": battery_voltage, "battery_capacity_Ah": battery_capacity_Ah, 
-    "battery_energy_J": battery_energy_J,
+    "mtot": mtot, "md": md, "mr": mr,
+    "I": I_single, "h1": h1, "g": g, "rho": rho,
+    "L": L, "omega_hover": omega_hover,
+    "k_thrust": k_thrust, "k_drag": k_drag,
+    "Ixx": Ixx, "Iyy": Iyy, "Izz": Izz
 }
 
 
@@ -53,9 +39,9 @@ def rotation(phi, theta, psi):
     cpsi, spsi = np.cos(psi), np.sin(psi)
 
     return np.array([
-        [cth*cpsi,  cth*spsi, -sth],
-        [sphi*sth*cpsi - cphi*spsi, sphi*sth*spsi + cphi*cpsi, sphi*cth],
-        [cphi*sth*cpsi + sphi*spsi, cphi*sth*spsi - sphi*cpsi, cphi*cth]
+        [cpsi*cth,  spsi*cth,   -sth],
+        [cpsi*sth*sphi - spsi*cphi,   spsi*sth*sphi + cpsi*cphi,   cth*sphi],
+        [cpsi*sth*cphi + spsi*sphi,   spsi*sth*cphi - cpsi*sphi,   cth*cphi]
     ])
 
 
@@ -86,33 +72,23 @@ def torque_body(omegas):
 
 
 # %%
-def rotor_power(omega, params=params):
-    """
-    Ideal rotor power (single rotor) using P = cP * omega^3.
-    omega: rad/s
-    """
-    cP = params["cP_rotor"]
-    return cP * omega**3
+def total_thrust(omegas, params=params):
+    kT = params["k_thrust"]
+    return kT * np.sum(omegas**2)
 
-def total_power(omegas, params=params):
-    """
-    Total electrical power for the quad [W], idealized.
-    omegas: array-like [ω1, ω2, ω3, ω4] in rad/s
-    """
-    return np.sum([rotor_power(w, params) for w in omegas])
-
-
-# %%
-def acceleration(omega_sq, angles, xdot, params):
+def acceleration(omegas, angles, xdot, params):
     m = params["mtot"]
     g = params["g"]
-    kT = params["k_thrust"]
 
     phi, theta, psi = angles
     R = rotation(phi, theta, psi)
 
-    thrust = np.array([0, 0, kT * np.sum(omega_sq**2)])
-    T_I = R @ thrust
+    # correct total thrust magnitude
+    T = total_thrust(omegas, params)
+
+    # thrust direction = body z mapped to world
+    T_I = R @ np.array([0, 0, T])
+
     gravity = np.array([0, 0, -g])
 
     return gravity + T_I/m
@@ -133,38 +109,43 @@ def angular_acceleration(omega_sq, omega, params):
 
 
 # %%
-# For storing results
+dt = 0.005
+start_time = 0
+end_time = 120  # or however long you want
+times = np.arange(start_time, end_time, dt)
+
+# State storage
 Xs = []
 Vels = []
 Angles = []
 Omegas = []
 
-x = np.array([0., 0., 10.])
+# Initial conditions
+x = np.array([0., 0., 0.])
 xdot = np.zeros(3)
 angles = np.zeros(3)
-omega = np.deg2rad(100 * (2*np.random.rand(3)-1))
+omega = np.zeros(3)    # NO random disturbance
 
 def input_func(t):
-    return np.array([400,400,400,400])
+    return np.array([400, 400, 400, 400])  # constant hover
 
 for t in times:
-    omega_sq = input_func(t)
+    omegas = input_func(t)
 
-    a = acceleration(omega_sq, angles, xdot, params)
-    omegadot = angular_acceleration(omega_sq, omega, params)
+    a = acceleration(omegas, angles, xdot, params)
+    omegadot = angular_acceleration(omegas, omega, params)
 
     omega += dt * omegadot
     angles += dt * euler_rates(*angles, *omega)
     xdot += dt * a
     x += dt * xdot
 
-    # store data
+    # store
     Xs.append(x.copy())
     Vels.append(xdot.copy())
     Angles.append(angles.copy())
     Omegas.append(omega.copy())
 
-# convert to arrays for easier plotting
 Xs = np.array(Xs)
 Angles = np.array(Angles)
 Omegas = np.array(Omegas)
@@ -199,15 +180,16 @@ plt.show()
 
 
 # %%
-plt.figure(figsize=(10,6))
-plt.plot(times, Omegas[:,0], label="p(t)")
-plt.plot(times, Omegas[:,1], label="q(t)")
-plt.plot(times, Omegas[:,2], label="r(t)")
-plt.xlabel("Time (s)")
-plt.ylabel("Angular Rate (rad/s)")
-plt.title("Body Rates vs Time")
-plt.legend()
-plt.grid(True)
+from mpl_toolkits.mplot3d import Axes3D
+
+fig = plt.figure(figsize=(10,7))
+ax = fig.add_subplot(111, projection='3d')
+ax.plot(Xs[:,0], Xs[:,1], Xs[:,2], linewidth=2)
+ax.set_xlabel('X (m)')
+ax.set_ylabel('Y (m)')
+ax.set_zlabel('Z (m)')
+ax.set_title('Quadcopter 3D Trajectory')
+ax.invert_zaxis()
 plt.show()
 
 
@@ -226,112 +208,233 @@ plt.show()
 
 
 # %%
-#HOVER Q1
 def hover_input(t):
-    """Constant rotor speeds at hover RPM."""
+    """
+    Constant rotor speeds equal to hover rpm.
+    From: 4 * k_thrust * omega_hover^2 = m g
+    """
     omega_h = params["omega_hover"]
     return np.array([omega_h, omega_h, omega_h, omega_h])
 
+
+# %%
 def simulate_hover(T=120.0, dt=0.005):
     """
     Simulate hover for duration T (seconds) with timestep dt.
     Returns:
-      times, Xs, Angles, Omegas_body, Powers, Energies
+      times, Xs, Angles, Omegas_body
     """
     times = np.arange(0.0, T+dt, dt)
 
-    # State variables
-    x      = np.array([0.0, 0.0, 1.0])   # start 1 m above ground
-    xdot   = np.zeros(3)                 # zero linear velocity
-    angles = np.zeros(3)                 # [phi, theta, psi]
-    omega_body  = np.zeros(3)            # [p, q, r]
+    # Initial state: hover 1 m above ground
+    x      = np.array([0.0, 0.0, 1.0])    # <-- REQUIRED
+    xdot   = np.zeros(3)                  # linear velocity
+    angles = np.zeros(3)                  # phi, theta, psi
+    omega_body = np.zeros(3)              # p, q, r (body rates)
 
-    # Storage for plots
+    # Storage
     N = len(times)
-    Xs       = np.zeros((N, 3))
-    Angles   = np.zeros((N, 3))
-    Omegas_b = np.zeros((N, 3))
-    Powers   = np.zeros(N)
-    Energies = np.zeros(N)
-
-    E = 0.0  # cumulative energy [J]
+    Xs = np.zeros((N, 3))
+    Angles_arr = np.zeros((N, 3))
+    Omegas_arr = np.zeros((N, 3))
 
     for i, t in enumerate(times):
-        omegas = hover_input(t)  # rotor speeds [ω1,ω2,ω3,ω4]
 
-        # linear and angular accelerations
-        a        = acceleration(omegas, angles, xdot, params)
+        # constant hover rotor speeds
+        omegas = hover_input(t)
+
+        # accelerations
+        a = acceleration(omegas, angles, xdot, params)
         omegadot = angular_acceleration(omegas, omega_body, params)
 
         # integrate rotational motion
-        omega_body  = omega_body  + dt * omegadot
-        angles      = angles      + dt * euler_rates(*angles, *omega_body)
+        omega_body = omega_body + dt * omegadot
+        angles     = angles + dt * euler_rates(*angles, *omega_body)
 
-        # integrate translational motion
+        # integrate linear motion
         xdot = xdot + dt * a
         x    = x    + dt * xdot
 
-        # power + energy
-        P = total_power(omegas, params)   # [W]
-        E = E + P * dt                    # [J], simple rectangular integration
-
         # log data
-        Xs[i, :]       = x
-        Angles[i, :]   = angles
-        Omegas_b[i, :] = omega_body
-        Powers[i]      = P
-        Energies[i]    = E
+        Xs[i,:] = x
+        Angles_arr[i,:] = angles
+        Omegas_arr[i,:] = omega_body
 
-    return times, Xs, Angles, Omegas_b, Powers, Energies
-
+    return times, Xs, Angles_arr, Omegas_arr
 
 
 # %%
-T_hover = 1200.0*2  # 2 minutes
-dt = 0.005
+# --- Run Hover Simulation ---
+T_hover = 120.0     # 2 minutes
+dt       = 0.005
 
-times, Xs, Angles, Omegas, Powers, Energies = simulate_hover(T=T_hover, dt=dt)
-
+times, Xs_hov, Angles_hov, Omegas_hov = simulate_hover(T=T_hover, dt=dt)
 
 
 # %%
-import matplotlib.pyplot as plt
-
 plt.figure(figsize=(10,5))
-plt.plot(times, Powers)
+plt.plot(times, Xs_hov[:,2], label="z(t)")
+plt.axhline(1.0, color='r', linestyle='--', label="Target altitude (1 m)")
 plt.xlabel("Time (s)")
-plt.ylabel("Power (W)")
-plt.title("Total quadcopter power vs time (hover)")
+plt.ylabel("Altitude z (m)")
+plt.title("Hover Test: Altitude vs Time (1 m for 2 minutes)")
 plt.grid(True)
+plt.legend()
 plt.show()
 
 
 # %%
-E_batt = params["battery_energy_J"]
-
 plt.figure(figsize=(10,5))
-plt.plot(times, Energies, label="Energy used [J]")
-plt.axhline(E_batt, color='r', linestyle='--', label="Battery energy")
+plt.plot(times, Angles_hov[:,0], 'r-',  linewidth=1.5, label='phi(t)')
+plt.plot(times, Angles_hov[:,1], 'g--', linewidth=1.5, label='theta(t)')
+plt.plot(times, Angles_hov[:,2], 'b:',  linewidth=2.0, label='psi(t)')
+
 plt.xlabel("Time (s)")
-plt.ylabel("Energy (J)")
-plt.title("Cumulative energy vs time (hover)")
-plt.legend()
+plt.ylabel("Angle (rad)")
+plt.title("Euler Angles During Hover")
 plt.grid(True)
+plt.legend()
 plt.show()
 
 
 # %%
-# Compute remaining battery energy
-E_batt = params["battery_energy_J"]
-battery_remaining = np.maximum(E_batt - Energies, 0)
+fig = plt.figure(figsize=(8,6))
+ax = fig.add_subplot(111, projection='3d')
+
+# Plot the trajectory (basically a tiny cloud)
+ax.plot(Xs_hov[:,0], Xs_hov[:,1], Xs_hov[:,2], 
+        color='blue', linewidth=2, label="Trajectory")
+
+# Plot the hover point as a big marker
+ax.scatter(Xs_hov[-1,0], Xs_hov[-1,1], Xs_hov[-1,2],
+           color='red', s=100, label="Hover point")
+
+ax.set_xlabel("X (m)")
+ax.set_ylabel("Y (m)")
+ax.set_zlabel("Z (m)")
+ax.set_title("3D Trajectory During Hover")
+
+# Make axes "equal scale" so it's visible
+max_range = 0.1
+ax.set_xlim(-max_range, max_range)
+ax.set_ylim(-max_range, max_range)
+ax.set_zlim(1 - max_range, 1 + max_range)
+
+ax.legend()
+plt.show()
+
+
+# %%
+def motor_speeds_from_thrust_torques(T, tau_phi, tau_theta, tau_psi, params=params):
+    """
+    Given desired total thrust T and body torques (tau_phi, tau_theta, tau_psi),
+    solve for the rotor speeds [ω1, ω2, ω3, ω4].
+
+    Returns ω's in rad/s.
+    """
+    kT = params["k_thrust"]
+    L  = params["L"]
+    b  = params["k_drag"]
+
+    A = np.array([
+        [ kT,      kT,      kT,      kT     ],
+        [ L*kT,    0.0,    -L*kT,    0.0    ],
+        [ 0.0,     L*kT,    0.0,    -L*kT   ],
+        [ b,      -b,       b,      -b      ]
+    ])
+
+    u = np.array([T, tau_phi, tau_theta, tau_psi])
+
+    # solve A * [ω1², ω2², ω3², ω4²] = u
+    omega_sq = np.linalg.solve(A, u)
+
+    # numerical safety: no negative due to tiny floating noise
+    omega_sq = np.clip(omega_sq, 0.0, None)
+
+    return np.sqrt(omega_sq)
+
+
+# %%
+def simulate_circle(T=60.0, dt=0.01):
+    R_path = 2.0
+    v = 0.5
+    Omega_c = v / R_path
+
+    # pull mass and gravity from params
+    m = params["mtot"]
+    g = params["g"]
+
+    times = np.arange(0., T, dt)
+
+    x = np.array([R_path, 0.0, 1.0])
+    xdot = np.array([0.0, 0.5, 0.0])
+    angles = np.zeros(3)
+    omega_body = np.zeros(3)
+
+    Xs = np.zeros((len(times),3))
+    Angles_log = np.zeros((len(times),3))
+
+    for i, t in enumerate(times):
+        phi, theta, psi = angles
+        p, q, r = omega_body
+
+        # desired yaw
+        psi_des = Omega_c * t
+
+        # desired roll for centripetal acceleration
+        a_c = v*v/R_path
+        phi_des = np.arcsin(a_c / g)
+        theta_des = 0.0
+
+        # errors
+        e_phi   = phi_des - phi
+        e_theta = theta_des - theta
+        e_psi   = psi_des - psi
+
+        # PD torques
+        tau_phi   = 0.8*e_phi   - 0.1*p
+        tau_theta = 0.8*e_theta - 0.1*q
+        tau_psi   = 5.0*e_psi   - 0.2*r
+
+        # tilt compensation (IMPORTANT)
+        T_des = m * g / (np.cos(phi)*np.cos(theta) + 1e-6)
+
+        # rotor speeds
+        omegas = motor_speeds_from_thrust_torques(T_des, tau_phi, tau_theta, tau_psi)
+
+        # dynamics
+        a = acceleration(omegas, angles, xdot, params)
+        omegadot = angular_acceleration(omegas, omega_body, params)
+
+        omega_body += dt * omegadot
+        angles     += dt * euler_rates(*angles, *omega_body)
+        xdot       += dt * a
+        x          += dt * xdot
+
+        Xs[i] = x
+        Angles_log[i] = angles
+
+    return times, Xs, Angles_log
+
+times_circ, Xs_circ, Angles_circ = simulate_circle()
+
+
+# %%
+plt.figure(figsize=(10,5))
+plt.plot(Xs_circ[:,0], Xs_circ[:,1])
+plt.axis('equal')
+plt.title("XY Trajectory: Circle Flight")
+plt.xlabel("x (m)")
+plt.ylabel("y (m)")
+plt.grid(True)
+plt.show()
 
 plt.figure(figsize=(10,5))
-plt.plot(times, battery_remaining, color='green', label="Battery remaining [J]")
-plt.axhline(0, color='r', linestyle='--', label="Empty battery")
+plt.plot(times_circ, Xs_circ[:,2])
+plt.axhline(1.0, color='red', linestyle='--')
+plt.title("Altitude during Circle Flight")
 plt.xlabel("Time (s)")
-plt.ylabel("Energy (J)")
-plt.title("Battery Remaining vs Time")
-plt.legend()
+plt.ylabel("z (m)")
 plt.grid(True)
 plt.show()
 
